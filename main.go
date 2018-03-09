@@ -85,7 +85,6 @@ func removeandlinkfile(path, v string) {
 // HashAndCompare compare hash
 // used as a group of worker, take input path from pathchan
 // Ouput on std actions done ( duplicate found or linked )
-//func HashAndCompare(path string) error {
 func HashAndCompare() error {
 
 	defer wg.Done()
@@ -161,7 +160,7 @@ func main() {
 	// 	defer pprof.StopCPUProfile()
 	// }
 
-	for num := 0; num < numCPU; num++ {
+	for ; numCPU > 0; numCPU-- {
 		wg.Add(1)
 		go HashAndCompare()
 	}
