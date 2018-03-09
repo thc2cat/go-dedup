@@ -21,13 +21,11 @@ func confirm(s string, tries int) byte {
 		if err != nil {
 			log.Fatal(err)
 		}
-
-		// Empty input (i.e. "\n")
-		if len(res) < 2 {
+		trimed := strings.ToLower(strings.TrimSpace(res))
+		if len(trimed) != 1 {
 			continue
 		}
-
-		return byte(strings.ToLower(strings.TrimSpace(res))[0])
+		return trimed[0]
 	}
 
 	return byte('s')

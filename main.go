@@ -2,12 +2,10 @@ package main
 
 import (
 	//"crypto/sha512"
-	"crypto/sha1"
-	"crypto/sha512"
+
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
@@ -18,17 +16,12 @@ import (
 	blake2b "github.com/minio/blake2b-simd"
 )
 
-//U can use sha512 if u prefer
-// var files = make(map[[sha512.Size]byte]string)
 var files = make(map[string]string)
 
-//var files = make(map[string]string)
-var size = make(map[int64]string)
 var smu, fmu sync.Mutex
 var wg sync.WaitGroup
-var numCPU = runtime.NumCPU()
-var quitChan = make(chan bool)
-var pathchan = make(chan string, numCPU)
+var numCPU = runtime.NumCPU() + 2
+var pathchan = make(chan string, 256)
 var flagLink, flagInteractive bool
 var flagMinSize, flagMaxSize int64
 
@@ -45,51 +38,49 @@ func checkDuplicate(path string, info os.FileInfo, err error) error {
 	return nil
 }
 
-func doHash(path string) [64]byte {
-	data, err := ioutil.ReadFile(path)
-	if err != nil {
-		fmt.Println(err)
-		//return nil
+// doHash3 return cryptographic secure hash of path file.
+func doHash3(path string) string {
+	if path == "" {
+		return ""
 	}
-	// fmt.Printf("SHA512 % x\n", sha512.Sum512(data))
-	return sha512.Sum512(data) // get the file sha512 hash
 
-}
-
-func doHash2(path string) []byte {
-	var zero []byte
 	f, err := os.Open(path)
 	if err != nil {
 		fmt.Println(err)
-
-		return zero
+		return ""
 	}
 	defer f.Close()
 
-	h := sha1.New()
-	if _, err := io.Copy(h, f); err != nil {
-		log.Fatal(err)
-	}
-	// fmt.Printf("SHA1 % x\n", h.Sum(nil))
-	return h.Sum(nil)
-}
-
-func doHash3(path string) []byte {
-	var zero []byte
-	f, err := os.Open(path)
-	if err != nil {
-		fmt.Println(err)
-
-		return zero
-	}
-	defer f.Close()
 	// go get github.com/minio/blake2b-simd
 	h := blake2b.New256() // or 512
 	if _, err := io.Copy(h, f); err != nil {
-		log.Fatal(err)
+		log.Println(err)
 	}
 	// fmt.Printf("SHA1 % x\n", h.Sum(nil))
-	return h.Sum(nil)
+	return string(h.Sum(nil))
+}
+
+func removefile(f string) {
+	err := os.Remove(f)
+	if err != nil {
+		log.Println(err)
+	}
+	fmt.Printf("removed %s\n", f)
+}
+
+func removeandlinkfile(path, v string) {
+	err := os.Remove(path)
+	if err != nil {
+		log.Println(err)
+	}
+	fmt.Printf("Removed %q,", path)
+
+	err = os.Link(v, path)
+	if err != nil {
+		log.Println(err)
+	}
+	fmt.Printf(" linked to %q.\n", v)
+
 }
 
 // HashAndCompare compare hash
@@ -100,63 +91,39 @@ func HashAndCompare() error {
 
 	defer wg.Done()
 
-	for {
-		select {
-		case path := <-pathchan:
-			hash := string(doHash3(path))
-			fmu.Lock()
-			if v, ok := files[hash]; ok {
-				links := hardlinkCount(path)
+	for path := range pathchan {
 
-				if links < 2 { // dont' show  allready linked files
-					fmt.Printf("%q is a duplicate of %q\n", path, v)
-					//fmt.Printf("[%d links]", links-1)
-
-					if flagInteractive {
-						ret := confirm("Remove Left, Right or Skip ? [lrS] ", 3)
-						switch ret {
-						case 'l':
-							err := os.Remove(path)
-							if err != nil {
-								log.Fatal(err)
-							}
-							fmt.Printf("removed %s\n", path)
-						case 'r':
-							err := os.Remove(v)
-							if err != nil {
-								log.Fatal(err)
-							}
-							fmt.Printf("removed %s\n", v)
-						case 's':
-							fmt.Println("Skipped")
-						}
+		hash := doHash3(path)
+		fmu.Lock()
+		if v, ok := files[hash]; ok {
+			fmu.Unlock() // Unlock as soon as possible
+			links := hardlinkCount(path)
+			if links < 2 { // dont' show  allready linked files
+				fmt.Printf("┌ %q\n└ %q\n", path, v)
+				if flagInteractive {
+					fmu.Lock() // Lock for interactive delete
+					ret := confirm("Remove line 1, 2 or Skip ? [12S] ", 3)
+					switch ret {
+					case '1':
+						removefile(path)
+					case '2':
+						removefile(v)
+					case 's':
+						fmt.Println("Skipped")
 					}
-
-					if flagLink {
-						err := os.Remove(path)
-						if err != nil {
-							log.Fatal(err)
-						}
-						fmt.Printf("Removed %q,", path)
-
-						err = os.Link(v, path)
-						if err != nil {
-							log.Fatal(err)
-						}
-						fmt.Printf("linked to %q.\n", v)
-
-					}
+					fmu.Unlock()
 				}
-
-			} else {
-				files[hash] = path // store in map for comparison
+				if flagLink {
+					removeandlinkfile(path, v)
+				}
 			}
-			fmu.Unlock()
-
-		case <-quitChan: // Reading on closed channel exit
-			return nil
+		} else {
+			files[hash] = path // Store in map for comparison
+			fmu.Unlock()       // Unlock as soon as possible
 		}
+
 	}
+	return nil
 }
 
 func main() {
@@ -204,7 +171,6 @@ func main() {
 	if err != nil {
 		fmt.Println(err)
 	}
-
-	close(quitChan)
+	close(pathchan)
 	wg.Wait()
 }
