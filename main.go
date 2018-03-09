@@ -1,8 +1,8 @@
 package main
 
-import (
-	//"crypto/sha512"
+// Gofindup : simple go file dedup tool.
 
+import (
 	"flag"
 	"fmt"
 	"io"
@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"runtime/pprof"
 	"sync"
 
 	blake2b "github.com/minio/blake2b-simd"
@@ -135,32 +134,32 @@ func main() {
 	flag.BoolVar(&flagInteractive, "it", false, "interactive deletion")
 	flag.Int64Var(&flagMinSize, "minsize", 1048576, "minimal file size")
 	flag.Int64Var(&flagMaxSize, "maxsize", 67108864, "maximal file size")
-	var memprofile = flag.String("memprofile", "", "write memory profile to this file")
-	var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
+	// var memprofile = flag.String("memprofile", "", "write memory profile to this file")
+	// var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 	flag.Parse()
 
-	if *memprofile != "" {
-		fmt.Println("Creating memprofile", *memprofile)
-		f, err := os.Create(*memprofile)
-		if err != nil {
-			log.Fatal("could not create memory profile: ", err)
-		}
-		runtime.GC() // get up-to-date statistics
-		if err := pprof.WriteHeapProfile(f); err != nil {
-			log.Fatal("could not write memory profile: ", err)
-		}
-		f.Close()
-	}
+	// if *memprofile != "" {
+	// 	fmt.Println("Creating memprofile", *memprofile)
+	// 	f, err := os.Create(*memprofile)
+	// 	if err != nil {
+	// 		log.Fatal("could not create memory profile: ", err)
+	// 	}
+	// 	runtime.GC() // get up-to-date statistics
+	// 	if err := pprof.WriteHeapProfile(f); err != nil {
+	// 		log.Fatal("could not write memory profile: ", err)
+	// 	}
+	// 	f.Close()
+	// }
 
-	if *cpuprofile != "" {
-		f, err := os.Create(*cpuprofile)
-		if err != nil {
-			log.Fatal(err)
-		}
-		fmt.Println("Creating cpuprofile", *cpuprofile)
-		pprof.StartCPUProfile(f)
-		defer pprof.StopCPUProfile()
-	}
+	// if *cpuprofile != "" {
+	// 	f, err := os.Create(*cpuprofile)
+	// 	if err != nil {
+	// 		log.Fatal(err)
+	// 	}
+	// 	fmt.Println("Creating cpuprofile", *cpuprofile)
+	// 	pprof.StartCPUProfile(f)
+	// 	defer pprof.StopCPUProfile()
+	// }
 
 	for num := 0; num < numCPU; num++ {
 		wg.Add(1)
