@@ -6,33 +6,38 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sync"
-
+	// go get github.com/minio/blake2b-simd
 	blake2b "github.com/minio/blake2b-simd"
 )
 
-var files = make(map[string]string)
+var (
+	files = make(map[string]string)
 
-var smu, fmu sync.Mutex
-var wg sync.WaitGroup
-var numCPU = runtime.NumCPU() + 2
-var pathchan = make(chan string, 256)
-var flagLink, flagInteractive bool
-var flagMinSize, flagMaxSize int64
+	smu, fmu                                             sync.Mutex
+	wg                                                   sync.WaitGroup
+	numCPU                                               = runtime.NumCPU() + 2
+	pathchan                                             = make(chan string, 512)
+	flagLink, flagInteractive, flagSilent, flagForceLink bool
+	flagMinSize, flagMaxSize                             int64
+	flagRegexp                                           string
+	compflagRegexp                                       *regexp.Regexp
+)
 
 func checkDuplicate(path string, info os.FileInfo, err error) error {
 	if err != nil {
-		fmt.Println(err)
+		fmt.Fprintln(os.Stderr, err)
 		return nil
 	}
 	if !info.Mode().IsRegular() || (info.Size() < flagMinSize) || (info.Size() > flagMaxSize) {
 		// skip dir or files ![min/Maxsize]
 		return nil
 	}
+	// fmt.Println(path)
 	pathchan <- path
 	return nil
 }
@@ -45,7 +50,7 @@ func doHash3(path string) string {
 
 	f, err := os.Open(path)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Fprintln(os.Stderr, err)
 		return ""
 	}
 	defer f.Close()
@@ -53,33 +58,36 @@ func doHash3(path string) string {
 	// go get github.com/minio/blake2b-simd
 	h := blake2b.New256() // or 512
 	if _, err := io.Copy(h, f); err != nil {
-		log.Println(err)
+		fmt.Fprintln(os.Stderr, err)
 	}
-	// fmt.Printf("SHA1 % x\n", h.Sum(nil))
 	return string(h.Sum(nil))
 }
 
 func removefile(f string) {
 	err := os.Remove(f)
 	if err != nil {
-		log.Println(err)
+		fmt.Fprintln(os.Stderr, err)
 	}
-	fmt.Printf("removed %s\n", f)
+	if !flagSilent {
+		fmt.Printf("removed %s\n", f)
+	}
 }
 
 func removeandlinkfile(path, v string) {
 	err := os.Remove(path)
 	if err != nil {
-		log.Println(err)
+		fmt.Fprintln(os.Stderr, err)
 	}
-	fmt.Printf("Removed %q,", path)
-
+	if !flagSilent {
+		fmt.Printf("« Removed,")
+	}
 	err = os.Link(v, path)
 	if err != nil {
-		log.Println(err)
+		fmt.Fprintln(os.Stderr, err)
 	}
-	fmt.Printf(" linked to %q.\n", v)
-
+	if !flagSilent {
+		fmt.Printf(" and linked. »\n")
+	}
 }
 
 // HashAndCompare compare hash
@@ -96,9 +104,11 @@ func HashAndCompare() error {
 		if v, ok := files[hash]; ok {
 			fmu.Unlock() // Unlock as soon as possible
 			links := hardlinkCount(path)
-			if links < 2 { // dont' show  allready linked files
-				fmt.Printf("┌ %q\n└ %q\n", path, v)
-				if flagInteractive {
+			if links < 2 || flagForceLink { // dont' show  allready linked files
+				if !flagSilent {
+					fmt.Printf("┌ %q\n└ %q\n", path, v)
+				}
+				if flagInteractive && !flagSilent {
 					fmu.Lock() // Lock for interactive delete
 					ret := confirm("Remove line 1, 2 or Skip ? [12S] ", 3)
 					switch ret {
@@ -114,12 +124,18 @@ func HashAndCompare() error {
 				if flagLink {
 					removeandlinkfile(path, v)
 				}
+				if flagRegexp != "" {
+					if compflagRegexp.MatchString(v) {
+						removefile(v)
+					} else if compflagRegexp.MatchString(path) {
+						removefile(path)
+					}
+				}
 			}
 		} else {
 			files[hash] = path // Store in map for comparison
 			fmu.Unlock()       // Unlock as soon as possible
 		}
-
 	}
 	return nil
 }
@@ -130,13 +146,19 @@ func main() {
 
 	flag.StringVar(&flagPath, "path", "/tmp", "path to dedup")
 	flag.BoolVar(&flagLink, "link", false, "rm and link")
+	flag.BoolVar(&flagSilent, "S", false, "Silent (no output)")
+	flag.BoolVar(&flagForceLink, "f", false, "force relink (even with already linked files")
 	flag.BoolVar(&flagInteractive, "it", false, "interactive deletion")
-	flag.Int64Var(&flagMinSize, "minsize", 1048576, "minimal file size")
-	flag.Int64Var(&flagMaxSize, "maxsize", 67108864, "maximal file size")
+	flag.Int64Var(&flagMinSize, "minsize", 1024*4, "minimal file size")
+	flag.Int64Var(&flagMaxSize, "maxsize", 650*1014*1024, "maximal file size")
+	flag.StringVar(&flagRegexp, "regexp", "%d", "regexp for deletion of duplicate")
 	// var memprofile = flag.String("memprofile", "", "write memory profile to this file")
 	// var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 	flag.Parse()
 
+	if flagRegexp != "" {
+		compflagRegexp = regexp.MustCompile(flagRegexp)
+	}
 	// if *memprofile != "" {
 	// 	fmt.Println("Creating memprofile", *memprofile)
 	// 	f, err := os.Create(*memprofile)
