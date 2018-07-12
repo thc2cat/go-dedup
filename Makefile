@@ -1,1 +1,1 @@
-include /home/cat/go/src/projects/make/Makefile-for-go.mk
+include ../make/Makefile-for-go.mk

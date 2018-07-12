@@ -18,7 +18,7 @@ import (
 var (
 	files = make(map[string]string)
 
-	smu, fmu                                             sync.Mutex
+	smu, fmu, delmu                                      sync.Mutex
 	wg                                                   sync.WaitGroup
 	numCPU                                               = runtime.NumCPU() + 2
 	pathchan                                             = make(chan string, 512)
@@ -49,11 +49,11 @@ func doHash3(path string) string {
 	}
 
 	f, err := os.Open(path)
+	defer f.Close()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return ""
 	}
-	defer f.Close()
 
 	// go get github.com/minio/blake2b-simd
 	h := blake2b.New256() // or 512
@@ -64,6 +64,8 @@ func doHash3(path string) string {
 }
 
 func removefile(f string) {
+	delmu.Lock()
+	defer delmu.Unlock()
 	err := os.Remove(f)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -74,6 +76,8 @@ func removefile(f string) {
 }
 
 func removeandlinkfile(path, v string) {
+	delmu.Lock()
+	defer delmu.Unlock()
 	err := os.Remove(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
