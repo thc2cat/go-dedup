@@ -2,6 +2,10 @@ package main
 
 // Gofindup : simple go file dedup tool.
 
+// History :
+// 0.2 - 2019/07/03 - adding exclude pattern, and multipath
+//
+
 import (
 	"flag"
 	"fmt"
@@ -10,7 +14,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
 	"sync"
+
 	// go get github.com/minio/blake2b-simd
 	blake2b "github.com/minio/blake2b-simd"
 )
@@ -24,8 +30,8 @@ var (
 	pathchan                                             = make(chan string, 512)
 	flagLink, flagInteractive, flagSilent, flagForceLink bool
 	flagMinSize, flagMaxSize                             int64
-	flagRegexp                                           string
-	compflagRegexp                                       *regexp.Regexp
+	flagRegexp, flagExcludeRegexp                        string
+	compflagRegexp, compflagExcludeRegexp                *regexp.Regexp
 )
 
 func checkDuplicate(path string, info os.FileInfo, err error) error {
@@ -38,7 +44,9 @@ func checkDuplicate(path string, info os.FileInfo, err error) error {
 		return nil
 	}
 	// fmt.Println(path)
-	pathchan <- path
+	if (flagExcludeRegexp == "") || !compflagExcludeRegexp.MatchString(path) {
+		pathchan <- path
+	}
 	return nil
 }
 
@@ -148,20 +156,25 @@ func main() {
 
 	var flagPath string
 
-	flag.StringVar(&flagPath, "path", "/tmp", "path to dedup")
+	flag.StringVar(&flagPath, "path", "/tmp,/dev/null", "path to dedup")
 	flag.BoolVar(&flagLink, "link", false, "rm and link")
 	flag.BoolVar(&flagSilent, "S", false, "Silent (no output)")
 	flag.BoolVar(&flagForceLink, "f", false, "force relink (even with already linked files")
 	flag.BoolVar(&flagInteractive, "it", false, "interactive deletion")
+	flag.StringVar(&flagRegexp, "regexp", "%d", "regexp for deletion of duplicate")
+	flag.StringVar(&flagExcludeRegexp, "exclude", "", "exclusion regexp")
 	flag.Int64Var(&flagMinSize, "minsize", 1024*4, "minimal file size")
 	flag.Int64Var(&flagMaxSize, "maxsize", 650*1014*1024, "maximal file size")
-	flag.StringVar(&flagRegexp, "regexp", "%d", "regexp for deletion of duplicate")
 	// var memprofile = flag.String("memprofile", "", "write memory profile to this file")
 	// var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 	flag.Parse()
 
 	if flagRegexp != "" {
 		compflagRegexp = regexp.MustCompile(flagRegexp)
+	}
+
+	if flagExcludeRegexp != "" {
+		compflagExcludeRegexp = regexp.MustCompile(flagExcludeRegexp)
 	}
 	// if *memprofile != "" {
 	// 	fmt.Println("Creating memprofile", *memprofile)
@@ -191,9 +204,11 @@ func main() {
 		go HashAndCompare()
 	}
 
-	err := filepath.Walk(flagPath, checkDuplicate)
-	if err != nil {
-		fmt.Println(err)
+	for _, s := range strings.Split(flagPath, ",") {
+		err := filepath.Walk(s, checkDuplicate)
+		if err != nil {
+			fmt.Println(err)
+		}
 	}
 	close(pathchan)
 	wg.Wait()
