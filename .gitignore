@@ -1,6 +1,5 @@
 *.exe
-gofindup
-*.txt
+godedup
 Trash/*
 vendor
 Gopkg.lock
