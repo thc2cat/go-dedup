@@ -161,7 +161,7 @@ func main() {
 	flag.BoolVar(&flagSilent, "S", false, "Silent (no output)")
 	flag.BoolVar(&flagForceLink, "f", false, "force relink (even with already linked files")
 	flag.BoolVar(&flagInteractive, "it", false, "interactive deletion")
-	flag.StringVar(&flagRegexp, "regexp", "%d", "regexp for deletion of duplicate")
+	flag.StringVar(&flagRegexp, "delregexp", "%d", "regexp for deletion")
 	flag.StringVar(&flagExcludeRegexp, "exclude", "", "exclusion regexp")
 	flag.Int64Var(&flagMinSize, "minsize", 1024*4, "minimal file size")
 	flag.Int64Var(&flagMaxSize, "maxsize", 650*1014*1024, "maximal file size")
