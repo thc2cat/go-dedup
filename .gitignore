@@ -1,6 +1,6 @@
 *.exe
 godedup
-Trash/*
+Trash
 vendor
-Gopkg.lock
-Gopkg.toml
+go.sum
+.vscode

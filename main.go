@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -24,15 +25,78 @@ import (
 var (
 	files = make(map[string]string)
 
-	smu, fmu, delmu                                      sync.Mutex
+	fmu, delmu                                           sync.Mutex
 	wg                                                   sync.WaitGroup
-	numCPU                                               = runtime.NumCPU() + 2
-	pathchan                                             = make(chan string, 512)
+	numCPU                                               = runtime.NumCPU()
+	pathchan                                             = make(chan string, numCPU)
 	flagLink, flagInteractive, flagSilent, flagForceLink bool
 	flagMinSize, flagMaxSize                             int64
-	flagRegexp, flagExcludeRegexp                        string
-	compflagRegexp, compflagExcludeRegexp                *regexp.Regexp
+	flagRmRegexp, flagIgnoreRegexp                       string
+	compflagRmRegexp, compflagIgnoreRegexp               *regexp.Regexp
 )
+
+func main() {
+
+	var flagPath string
+
+	flag.StringVar(&flagPath, "path", "/tmp,/dev/null", "path to dedup")
+	flag.BoolVar(&flagLink, "link", false, "rm and link")
+	flag.BoolVar(&flagSilent, "S", false, "Silent (no output)")
+	flag.BoolVar(&flagForceLink, "f", false, "force relink (even with already linked files)")
+	flag.BoolVar(&flagInteractive, "it", false, "interactive deletion")
+	flag.StringVar(&flagRmRegexp, "rm", "%d", "rm regexp")
+	flag.StringVar(&flagIgnoreRegexp, "ignore", "", "ignore file path regexp")
+	flag.Int64Var(&flagMinSize, "minsize", 1024*4, "minimal file size")
+	flag.Int64Var(&flagMaxSize, "maxsize", 650*1014*1024, "maximal file size")
+	// var memprofile = flag.String("memprofile", "", "write memory profile to this file")
+	// var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
+	flag.Parse()
+
+	if flagRmRegexp != "" {
+		compflagRmRegexp = regexp.MustCompile(flagRmRegexp)
+	}
+
+	if flagIgnoreRegexp != "" {
+		compflagIgnoreRegexp = regexp.MustCompile(flagIgnoreRegexp)
+	}
+	// if *memprofile != "" {
+	// 	fmt.Println("Creating memprofile", *memprofile)
+	// 	f, err := os.Create(*memprofile)
+	// 	if err != nil {
+	// 		log.Fatal("could not create memory profile: ", err)
+	// 	}
+	// 	runtime.GC() // get up-to-date statistics
+	// 	if err := pprof.WriteHeapProfile(f); err != nil {
+	// 		log.Fatal("could not write memory profile: ", err)
+	// 	}
+	// 	f.Close()
+	// }
+
+	// if *cpuprofile != "" {
+	// 	f, err := os.Create(*cpuprofile)
+	// 	if err != nil {
+	// 		log.Fatal(err)
+	// 	}
+	// 	fmt.Println("Creating cpuprofile", *cpuprofile)
+	// 	pprof.StartCPUProfile(f)
+	// 	defer pprof.StopCPUProfile()
+	// }
+
+	for ; numCPU > 0; numCPU-- {
+		wg.Add(1)
+		go HashAndCompare()
+	}
+
+	for _, s := range strings.Split(flagPath, ",") {
+		err := filepath.Walk(s, checkDuplicate)
+		if err != nil {
+			fmt.Println(err)
+		}
+	}
+	close(pathchan)
+	wg.Wait()
+
+}
 
 func checkDuplicate(path string, info os.FileInfo, err error) error {
 	if err != nil {
@@ -44,7 +108,7 @@ func checkDuplicate(path string, info os.FileInfo, err error) error {
 		return nil
 	}
 	// fmt.Println(path)
-	if (flagExcludeRegexp == "") || !compflagExcludeRegexp.MatchString(path) {
+	if (flagIgnoreRegexp == "") || !compflagIgnoreRegexp.MatchString(path) {
 		pathchan <- path
 	}
 	return nil
@@ -57,7 +121,9 @@ func doHash3(path string) string {
 	}
 
 	f, err := os.Open(path)
-	defer f.Close()
+
+	defer checkandclose(f)
+
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return ""
@@ -71,6 +137,13 @@ func doHash3(path string) string {
 	return string(h.Sum(nil))
 }
 
+func checkandclose(f *os.File) {
+	if err := f.Close(); err != nil {
+		log.Print(err)
+	}
+
+}
+
 func removefile(f string) {
 	delmu.Lock()
 	defer delmu.Unlock()
@@ -79,7 +152,7 @@ func removefile(f string) {
 		fmt.Fprintln(os.Stderr, err)
 	}
 	if !flagSilent {
-		fmt.Printf("removed %s\n", f)
+		fmt.Printf("--- removed %s\n", f)
 	}
 }
 
@@ -136,10 +209,10 @@ func HashAndCompare() error {
 				if flagLink {
 					removeandlinkfile(path, v)
 				}
-				if flagRegexp != "" {
-					if compflagRegexp.MatchString(v) {
+				if flagRmRegexp != "" {
+					if compflagRmRegexp.MatchString(v) {
 						removefile(v)
-					} else if compflagRegexp.MatchString(path) {
+					} else if compflagRmRegexp.MatchString(path) {
 						removefile(path)
 					}
 				}
@@ -150,66 +223,4 @@ func HashAndCompare() error {
 		}
 	}
 	return nil
-}
-
-func main() {
-
-	var flagPath string
-
-	flag.StringVar(&flagPath, "path", "/tmp,/dev/null", "path to dedup")
-	flag.BoolVar(&flagLink, "link", false, "rm and link")
-	flag.BoolVar(&flagSilent, "S", false, "Silent (no output)")
-	flag.BoolVar(&flagForceLink, "f", false, "force relink (even with already linked files")
-	flag.BoolVar(&flagInteractive, "it", false, "interactive deletion")
-	flag.StringVar(&flagRegexp, "delregexp", "%d", "regexp for deletion")
-	flag.StringVar(&flagExcludeRegexp, "exclude", "", "exclusion regexp")
-	flag.Int64Var(&flagMinSize, "minsize", 1024*4, "minimal file size")
-	flag.Int64Var(&flagMaxSize, "maxsize", 650*1014*1024, "maximal file size")
-	// var memprofile = flag.String("memprofile", "", "write memory profile to this file")
-	// var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
-	flag.Parse()
-
-	if flagRegexp != "" {
-		compflagRegexp = regexp.MustCompile(flagRegexp)
-	}
-
-	if flagExcludeRegexp != "" {
-		compflagExcludeRegexp = regexp.MustCompile(flagExcludeRegexp)
-	}
-	// if *memprofile != "" {
-	// 	fmt.Println("Creating memprofile", *memprofile)
-	// 	f, err := os.Create(*memprofile)
-	// 	if err != nil {
-	// 		log.Fatal("could not create memory profile: ", err)
-	// 	}
-	// 	runtime.GC() // get up-to-date statistics
-	// 	if err := pprof.WriteHeapProfile(f); err != nil {
-	// 		log.Fatal("could not write memory profile: ", err)
-	// 	}
-	// 	f.Close()
-	// }
-
-	// if *cpuprofile != "" {
-	// 	f, err := os.Create(*cpuprofile)
-	// 	if err != nil {
-	// 		log.Fatal(err)
-	// 	}
-	// 	fmt.Println("Creating cpuprofile", *cpuprofile)
-	// 	pprof.StartCPUProfile(f)
-	// 	defer pprof.StopCPUProfile()
-	// }
-
-	for ; numCPU > 0; numCPU-- {
-		wg.Add(1)
-		go HashAndCompare()
-	}
-
-	for _, s := range strings.Split(flagPath, ",") {
-		err := filepath.Walk(s, checkDuplicate)
-		if err != nil {
-			fmt.Println(err)
-		}
-	}
-	close(pathchan)
-	wg.Wait()
 }
