@@ -4,6 +4,7 @@ package main
 
 // History :
 // 0.2 - 2019/07/03 - adding exclude pattern, and multipath
+// 0.3 - xxhash instead of blake2b
 //
 
 import (
@@ -19,7 +20,8 @@ import (
 	"sync"
 
 	// go get github.com/minio/blake2b-simd
-	blake2b "github.com/minio/blake2b-simd"
+	// go get "github.com/cespare/xxhash"
+	xxhash "github.com/cespare/xxhash"
 )
 
 var (
@@ -47,7 +49,7 @@ func main() {
 	flag.StringVar(&flagRmRegexp, "rm", "%d", "rm regexp")
 	flag.StringVar(&flagIgnoreRegexp, "ignore", "", "ignore file path regexp")
 	flag.Int64Var(&flagMinSize, "minsize", 1024*4, "minimal file size")
-	flag.Int64Var(&flagMaxSize, "maxsize", 650*1014*1024, "maximal file size")
+	flag.Int64Var(&flagMaxSize, "maxsize", 650, "maximal file size(Mo)")
 	// var memprofile = flag.String("memprofile", "", "write memory profile to this file")
 	// var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 	flag.Parse()
@@ -103,11 +105,10 @@ func checkDuplicate(path string, info os.FileInfo, err error) error {
 		fmt.Fprintln(os.Stderr, err)
 		return nil
 	}
-	if !info.Mode().IsRegular() || (info.Size() < flagMinSize) || (info.Size() > flagMaxSize) {
+	if !info.Mode().IsRegular() || (info.Size() < flagMinSize) || (info.Size() > flagMaxSize*1014*1024) {
 		// skip dir or files ![min/Maxsize]
 		return nil
 	}
-	// fmt.Println(path)
 	if (flagIgnoreRegexp == "") || !compflagIgnoreRegexp.MatchString(path) {
 		pathchan <- path
 	}
@@ -129,12 +130,11 @@ func doHash3(path string) string {
 		return ""
 	}
 
-	// go get github.com/minio/blake2b-simd
-	h := blake2b.New256() // or 512
-	if _, err := io.Copy(h, f); err != nil {
+	xxh := xxhash.New()
+	if _, err := io.Copy(xxh, f); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 	}
-	return string(h.Sum(nil))
+	return string(xxh.Sum(nil))
 }
 
 func checkandclose(f *os.File) {
