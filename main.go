@@ -4,12 +4,13 @@ package main
 
 // History :
 // 0.2 - 2019/07/03 - adding exclude pattern, and multipath
-// 0.3 - xxhash instead of blake2b
+// 0.31 - xxhash or blake2b with -k choice
 //
 
 import (
 	"flag"
 	"fmt"
+	"hash"
 	"io"
 	"log"
 	"os"
@@ -19,22 +20,24 @@ import (
 	"strings"
 	"sync"
 
-	// go get github.com/minio/blake2b-simd
-	// go get "github.com/cespare/xxhash"
+	// go get github.com/minio/blake2b-simd ( cryptographic Hash)
+	// go get "github.com/cespare/xxhash" ( faster non cryptographic Hash)
 	xxhash "github.com/cespare/xxhash"
+	blake2b "github.com/minio/blake2b-simd"
 )
 
 var (
 	files = make(map[string]string)
 
-	fmu, delmu                                           sync.Mutex
-	wg                                                   sync.WaitGroup
-	numCPU                                               = runtime.NumCPU()
-	pathchan                                             = make(chan string, numCPU)
-	flagLink, flagInteractive, flagSilent, flagForceLink bool
-	flagMinSize, flagMaxSize                             int64
-	flagRmRegexp, flagIgnoreRegexp                       string
-	compflagRmRegexp, compflagIgnoreRegexp               *regexp.Regexp
+	fmu, delmu                                sync.Mutex
+	wg                                        sync.WaitGroup
+	numCPU                                    = runtime.NumCPU()
+	pathchan                                  = make(chan string, numCPU)
+	flagLink, flagInteractive, flagkryptohash bool
+	flagSilent, flagForceLink                 bool
+	flagMinSize, flagMaxSize                  int64
+	flagRmRegexp, flagIgnoreRegexp            string
+	compflagRmRegexp, compflagIgnoreRegexp    *regexp.Regexp
 )
 
 func main() {
@@ -46,6 +49,7 @@ func main() {
 	flag.BoolVar(&flagSilent, "S", false, "Silent (no output)")
 	flag.BoolVar(&flagForceLink, "f", false, "force relink (even with already linked files)")
 	flag.BoolVar(&flagInteractive, "it", false, "interactive deletion")
+	flag.BoolVar(&flagkryptohash, "k", false, "use kryptographic hash ( blake2 instead of xxhash")
 	flag.StringVar(&flagRmRegexp, "rm", "%d", "rm regexp")
 	flag.StringVar(&flagIgnoreRegexp, "ignore", "", "ignore file path regexp")
 	flag.Int64Var(&flagMinSize, "minsize", 1024*4, "minimal file size")
@@ -130,11 +134,16 @@ func doHash3(path string) string {
 		return ""
 	}
 
-	xxh := xxhash.New()
-	if _, err := io.Copy(xxh, f); err != nil {
+	var h hash.Hash
+	if flagkryptohash {
+		h = blake2b.New256() // or 512
+	} else {
+		h = xxhash.New()
+	}
+	if _, err := io.Copy(h, f); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 	}
-	return string(xxh.Sum(nil))
+	return string(h.Sum(nil))
 }
 
 func checkandclose(f *os.File) {
@@ -185,7 +194,8 @@ func HashAndCompare() error {
 	for path := range pathchan {
 
 		hash := doHash3(path)
-		fmu.Lock()
+
+		fmu.Lock() // Prevent files[hash] alteration ?
 		if v, ok := files[hash]; ok {
 			fmu.Unlock() // Unlock as soon as possible
 			links := hardlinkCount(path)

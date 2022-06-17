@@ -4,17 +4,11 @@ go-dedup is a portable golang (Windows/Linux) file de-duplication tool.
 
 ## Description
 
-Go-dedup find files in path arguments, make fast hash with minio/blake2b-simd , and display identical files names.
+Go-dedup find files in path arguments, make fast hash with xxhash , and display identical files names.
 
 Options includes deletion, link(linux), interactive deletion, ignore pattern and deletion pattern.
 
 ## Getting Started
-
-### Dependencies
-
-* [github/minio/blake2b-simd](https://github.com/minio/blake2b-simd)
-
-### Installing
 
 ```shell
 go mod tidy
@@ -39,7 +33,7 @@ Usage of C:\dev\src\projects\godedup\godedup.exe:
   -link
         rm and link
   -maxsize int
-        maximal file size (default 674918400)
+        maximal file size 6o (default 650)
   -minsize int
         minimal file size (default 4096)
   -path string

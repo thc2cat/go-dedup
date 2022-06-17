@@ -27,7 +27,7 @@ func hardlinkCount(filename string) int {
 	}
 
 	// The index number of this file's inode:
-	//inode := uint64(s.Ino)
+	// inode := uint64(s.Ino)
 	// Total number of files/hardlinks connected to this file's inode:
 	return int(s.Nlink)
 
