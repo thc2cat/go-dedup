@@ -27,12 +27,12 @@ import (
 )
 
 var (
-	files = make(map[string]string)
+	files = make(map[string]string) // Contains map[string(hash(path))]:path
 
-	fmu, delmu                                sync.Mutex
-	wg                                        sync.WaitGroup
+	fmu, delmu sync.Mutex
+
 	numCPU                                    = runtime.NumCPU()
-	pathchan                                  = make(chan string, numCPU)
+	pathchan                                  = make(chan string, 1024)
 	flagLink, flagInteractive, flagkryptohash bool
 	flagSilent, flagForceLink                 bool
 	flagMinSize, flagMaxSize                  int64
@@ -43,13 +43,14 @@ var (
 func main() {
 
 	var flagPath string
+	var wg sync.WaitGroup
 
 	flag.StringVar(&flagPath, "path", "/tmp,/dev/null", "path to dedup")
 	flag.BoolVar(&flagLink, "link", false, "rm and link")
 	flag.BoolVar(&flagSilent, "S", false, "Silent (no output)")
 	flag.BoolVar(&flagForceLink, "f", false, "force relink (even with already linked files)")
 	flag.BoolVar(&flagInteractive, "it", false, "interactive deletion")
-	flag.BoolVar(&flagkryptohash, "k", false, "use kryptographic hash ( blake2 instead of xxhash")
+	flag.BoolVar(&flagkryptohash, "k", false, "use kryptographic hash ( blake2 instead of xxhash )")
 	flag.StringVar(&flagRmRegexp, "rm", "%d", "rm regexp")
 	flag.StringVar(&flagIgnoreRegexp, "ignore", "", "ignore file path regexp")
 	flag.Int64Var(&flagMinSize, "minsize", 1024*4, "minimal file size")
@@ -88,9 +89,9 @@ func main() {
 	// 	defer pprof.StopCPUProfile()
 	// }
 
-	for ; numCPU > 0; numCPU-- {
+	for ; numCPU-1 > 0; numCPU-- {
 		wg.Add(1)
-		go HashAndCompare()
+		go HashAndCompare(&wg)
 	}
 
 	for _, s := range strings.Split(flagPath, ",") {
@@ -101,7 +102,6 @@ func main() {
 	}
 	close(pathchan)
 	wg.Wait()
-
 }
 
 func checkDuplicate(path string, info os.FileInfo, err error) error {
@@ -119,29 +119,33 @@ func checkDuplicate(path string, info os.FileInfo, err error) error {
 	return nil
 }
 
-// doHash3 return cryptographic secure hash of path file.
+// doHash3 return cryptographic secure or fast hash of file.
 func doHash3(path string) string {
 	if path == "" {
 		return ""
 	}
 
 	f, err := os.Open(path)
-
-	defer checkandclose(f)
-
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		f.Close()
 		return ""
 	}
 
 	var h hash.Hash
+
 	if flagkryptohash {
 		h = blake2b.New256() // or 512
 	} else {
 		h = xxhash.New()
 	}
-	if _, err := io.Copy(h, f); err != nil {
+
+	if _, err = io.Copy(h, f); err != nil {
 		fmt.Fprintln(os.Stderr, err)
+	}
+
+	if err = f.Close(); err != nil {
+		log.Print(err)
 	}
 	return string(h.Sum(nil))
 }
@@ -150,7 +154,6 @@ func checkandclose(f *os.File) {
 	if err := f.Close(); err != nil {
 		log.Print(err)
 	}
-
 }
 
 func removefile(f string) {
@@ -186,14 +189,17 @@ func removeandlinkfile(path, v string) {
 
 // HashAndCompare compare hash
 // used as a group of worker, take input path from pathchan
-// Ouput on std actions done ( duplicate found or linked )
-func HashAndCompare() error {
+// Ouput on std actions done ( duplicate, found or linked )
+func HashAndCompare(wg *sync.WaitGroup) error {
 
 	defer wg.Done()
 
 	for path := range pathchan {
 
 		hash := doHash3(path)
+		if hash == "" {
+			break
+		}
 
 		fmu.Lock() // Prevent files[hash] alteration ?
 		if v, ok := files[hash]; ok {
