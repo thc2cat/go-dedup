@@ -5,9 +5,11 @@ package main
 // History :
 // 0.2 - 2019/07/03 - adding exclude pattern, and multipath
 // 0.31 - xxhash or blake2b with -k choice
+// 0.42 - output to a file, reusing this file as input
 //
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"hash"
@@ -29,15 +31,18 @@ import (
 var (
 	files = make(map[string]string) // Contains map[string(hash(path))]:path
 
-	fmu, delmu sync.Mutex
+	fmu, delmu, toFileM, itM sync.Mutex
 
-	numCPU                                    = runtime.NumCPU()
-	pathchan                                  = make(chan string, 1024)
+	numCPU   = runtime.NumCPU()
+	pathchan = make(chan string, 1024)
+
 	flagLink, flagInteractive, flagkryptohash bool
 	flagSilent, flagForceLink                 bool
 	flagMinSize, flagMaxSize                  int64
 	flagRmRegexp, flagIgnoreRegexp            string
+	fromFile, toFile                          string
 	compflagRmRegexp, compflagIgnoreRegexp    *regexp.Regexp
+	toFileW                                   *bufio.Writer
 )
 
 func main() {
@@ -53,6 +58,8 @@ func main() {
 	flag.BoolVar(&flagkryptohash, "k", false, "use kryptographic hash ( blake2 instead of xxhash )")
 	flag.StringVar(&flagRmRegexp, "rm", "%d", "rm regexp")
 	flag.StringVar(&flagIgnoreRegexp, "ignore", "", "ignore file path regexp")
+	flag.StringVar(&fromFile, "fromFile", "", "compare items list from this file")
+	flag.StringVar(&toFile, "toFile", "", "output duplicates files in this file")
 	flag.Int64Var(&flagMinSize, "minsize", 1024*4, "minimal file size")
 	flag.Int64Var(&flagMaxSize, "maxsize", 650, "maximal file size(Mo)")
 	// var memprofile = flag.String("memprofile", "", "write memory profile to this file")
@@ -94,14 +101,53 @@ func main() {
 		go HashAndCompare(&wg)
 	}
 
-	for _, s := range strings.Split(flagPath, ",") {
-		err := filepath.Walk(s, checkDuplicate)
+	if len(toFile) > 0 {
+		f, err := os.Create(toFile)
 		if err != nil {
-			fmt.Println(err)
+			log.Fatal(err)
+		}
+		toFileW = bufio.NewWriter(f)
+	}
+	if len(fromFile) > 0 {
+		loadFile(fromFile)
+	} else {
+		for _, s := range strings.Split(flagPath, ",") {
+			err := filepath.Walk(s, checkDuplicate)
+			if err != nil {
+				fmt.Println(err)
+			}
 		}
 	}
 	close(pathchan)
+
 	wg.Wait()
+	if len(toFile) > 0 {
+		toFileW.Flush()
+	}
+}
+
+func loadFile(pfile string) {
+	file, err := os.Open(pfile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+
+	// optionally, resize scanner's capacity for lines over 64K, see next example
+	for scanner.Scan() {
+		this := scanner.Text()
+		info, err := os.Lstat(this)
+
+		if err != nil || !info.IsDir() {
+			checkDuplicate(this, info, err)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Fatal(err)
+	}
+
 }
 
 func checkDuplicate(path string, info os.FileInfo, err error) error {
@@ -113,7 +159,7 @@ func checkDuplicate(path string, info os.FileInfo, err error) error {
 		// skip dir or files ![min/Maxsize]
 		return nil
 	}
-	if (flagIgnoreRegexp == "") || !compflagIgnoreRegexp.MatchString(path) {
+	if (len(flagIgnoreRegexp) == 0) || !compflagIgnoreRegexp.MatchString(path) {
 		pathchan <- path
 	}
 	return nil
@@ -148,12 +194,6 @@ func doHash3(path string) string {
 		log.Print(err)
 	}
 	return string(h.Sum(nil))
-}
-
-func checkandclose(f *os.File) {
-	if err := f.Close(); err != nil {
-		log.Print(err)
-	}
 }
 
 func removefile(f string) {
@@ -198,14 +238,26 @@ func HashAndCompare(wg *sync.WaitGroup) error {
 
 		hash := doHash3(path)
 		if hash == "" {
-			break
+			continue
 		}
 
 		fmu.Lock() // Prevent files[hash] alteration ?
 		if v, ok := files[hash]; ok {
+
+			if len(toFile) > 0 { // Outputing to File
+				toFileM.Lock()
+				bufStr := path + "\n" + v + "\n"
+				toFileW.WriteString(bufStr)
+				toFileM.Unlock()
+
+				fmu.Unlock()
+				continue
+			}
+
 			fmu.Unlock() // Unlock as soon as possible
 			links := hardlinkCount(path)
 			if links < 2 || flagForceLink { // dont' show  allready linked files
+				itM.Lock()
 				if !flagSilent {
 					fmt.Printf("┌ %q\n└ %q\n", path, v)
 				}
@@ -232,6 +284,7 @@ func HashAndCompare(wg *sync.WaitGroup) error {
 						removefile(path)
 					}
 				}
+				itM.Unlock()
 			}
 		} else {
 			files[hash] = path // Store in map for comparison

@@ -1,6 +1,6 @@
 module projects/godedup
 
-go 1.15
+go 1.19
 
 require (
 	github.com/cespare/xxhash v1.1.0
